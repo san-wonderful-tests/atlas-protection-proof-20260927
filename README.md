@@ -21,7 +21,8 @@ history, and published the `Atlas Finalized` commit status.
    desired-schema drift against PostgreSQL 17. Atlas Pro migration lint also
    runs when an `ATLAS_TOKEN` repository secret is configured.
 7. It pushes the finalized migration commit, verifies that the migration tip on
-   `main` has not changed, publishes `Atlas Finalized`, and squash-merges the PR.
+   `main` has not changed, publishes `Atlas Finalized`, waits for GitHub to
+   recompute mergeability for the exact pushed SHA, and squash-merges the PR.
 
 Other pull requests are not serialized. A push to `main` that changes the Atlas
 inputs invalidates outstanding migration statuses.
@@ -88,6 +89,12 @@ This is a lab implementation, not a production credential model. It uses the
 repository `GITHUB_TOKEN` and executes only the finalizer script from protected
 `main`; it never executes shell code from the pull request. Candidate SQL is
 applied only to an isolated PostgreSQL service container.
+
+A branch update made by the repository `GITHUB_TOKEN` produces an
+approval-required `pull_request` CI run by GitHub design. The lab coordinator
+therefore performs the same migration validation in its trusted job before
+publishing `Atlas Finalized`. A production GitHub App token should trigger the
+ordinary post-update CI run instead.
 
 For Wonderful, the same protocol should be owned by a narrowly scoped GitHub
 App. The App should be the only integration allowed to publish

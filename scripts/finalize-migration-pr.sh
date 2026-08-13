@@ -14,6 +14,9 @@ migration_url="file://${PWD}/${migration_dir}"
 schema_url="file://${PWD}/schema.hcl"
 finalized=false
 
+# shellcheck source=scripts/github-pr-merge.sh
+source "$(dirname "${BASH_SOURCE[0]}")/github-pr-merge.sh"
+
 post_status() {
   local sha=$1
   local state=$2
@@ -140,14 +143,8 @@ fi
 
 post_status "${head_sha}" success 'Rebased and validated against the current migration tip.'
 
-merge_result=$(
-  gh api --method PUT "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}/merge" \
-    -f merge_method=squash \
-    -f sha="${head_sha}"
-)
-if [[ $(jq -r '.merged' <<<"${merge_result}") != true ]]; then
+if ! merge_finalized_pr "${pr_number}" "${head_sha}" "${base_fingerprint}"; then
   post_status "${head_sha}" failure 'GitHub rejected the finalized merge.'
-  jq . <<<"${merge_result}" >&2
   exit 1
 fi
 
