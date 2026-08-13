@@ -28,11 +28,15 @@ inputs invalidates outstanding migration statuses.
 
 ## Live race test
 
-Two demonstration pull requests can be created from the same `main` revision.
-Both will contain a valid but mutually conflicting `atlas.sum`.
+Two draft exercise pull requests are ready from the same `main` revision. Both
+contain a valid but mutually conflicting `atlas.sum`:
 
-Add `db-ready` to both PRs in quick succession. The coordinator workflows share
-the `atlas-migration-coordinator` concurrency group:
+- [PR #5: add task due timestamp](https://github.com/san-wonderful-tests/atlas-migration-coordinator-lab/pull/5)
+- [PR #6: add project archive timestamp](https://github.com/san-wonderful-tests/atlas-migration-coordinator-lab/pull/6)
+
+Mark both ready for review, then add `db-ready` to both PRs in quick succession.
+The coordinator workflows share the `atlas-migration-coordinator` concurrency
+group:
 
 - The first PR is finalized and merged.
 - The second workflow then fetches the new migration tip, rebases its migration
@@ -41,6 +45,14 @@ the `atlas-migration-coordinator` concurrency group:
 
 The `Actions` tab shows the lease and every safety check. The pull request's
 commit list shows the bot-generated merge/rebase commit.
+
+The setup has already completed one clean race: [PR #3](https://github.com/san-wonderful-tests/atlas-migration-coordinator-lab/pull/3)
+merged first, then [PR #4](https://github.com/san-wonderful-tests/atlas-migration-coordinator-lab/pull/4)
+rebased its migration onto the new tip, replayed the combined history, and
+merged. [PR #1](https://github.com/san-wonderful-tests/atlas-migration-coordinator-lab/pull/1)
+also demonstrates the negative path: the coordinator rejected a real
+`schema.hcl` conflict instead of silently resolving anything beyond
+`atlas.sum`.
 
 ## GitHub plan limitation
 
