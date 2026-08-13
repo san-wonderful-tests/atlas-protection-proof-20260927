@@ -33,3 +33,31 @@ table "projects" {
     columns = [column.tenant_id, column.name]
   }
 }
+
+table "tasks" {
+  schema = schema.public
+
+  column "id" {
+    type = uuid
+    null = false
+  }
+
+  column "tenant_id" {
+    type = uuid
+    null = false
+  }
+
+  column "title" {
+    type = text
+    null = false
+  }
+
+  primary_key {
+    columns = [column.id]
+  }
+
+  index "idx_tasks_tenant_title" {
+    unique  = true
+    columns = [column.tenant_id, column.title]
+  }
+}
