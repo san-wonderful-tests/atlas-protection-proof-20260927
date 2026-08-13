@@ -1,0 +1,68 @@
+name: Atlas Status
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  classify-pr:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish initial Atlas status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          changed=$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename')
+          if grep -Eq '^(migrations/|schema\.hcl$|atlas\.hcl$)' <<<"${changed}"; then
+            state=pending
+            description='Add db-ready when this migration PR is ready to finalize.'
+          else
+            state=success
+            description='No Atlas migration inputs changed.'
+          fi
+          gh api --method POST "repos/${REPOSITORY}/statuses/${HEAD_SHA}" \
+            -f state="${state}" \
+            -f context='Atlas Finalized' \
+            -f description="${description}"
+
+  invalidate-after-main-change:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Invalidate open migration PRs when the migration tip moves
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          changed=$(gh api "repos/${REPOSITORY}/compare/${BEFORE}...${AFTER}" --jq '.files[].filename')
+          if ! grep -Eq '^(migrations/|schema\.hcl$|atlas\.hcl$)' <<<"${changed}"; then
+            exit 0
+          fi
+
+          while read -r pr_number; do
+            [[ -n "${pr_number}" ]] || continue
+            pr_files=$(gh api --paginate "repos/${REPOSITORY}/pulls/${pr_number}/files" --jq '.[].filename')
+            if ! grep -Eq '^(migrations/|schema\.hcl$|atlas\.hcl$)' <<<"${pr_files}"; then
+              continue
+            fi
+            head_sha=$(gh api "repos/${REPOSITORY}/pulls/${pr_number}" --jq '.head.sha')
+            gh api --method POST "repos/${REPOSITORY}/statuses/${head_sha}" \
+              -f state=pending \
+              -f context='Atlas Finalized' \
+              -f description='Main migration tip changed; finalize again.'
+          done < <(gh api --paginate "repos/${REPOSITORY}/pulls?state=open" --jq '.[].number')
