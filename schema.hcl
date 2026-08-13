@@ -24,6 +24,11 @@ table "projects" {
     null = true
   }
 
+  column "description" {
+    type = text
+    null = true
+  }
+
   primary_key {
     columns = [column.id]
   }
