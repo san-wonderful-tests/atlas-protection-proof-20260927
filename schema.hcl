@@ -19,6 +19,11 @@ table "projects" {
     null = false
   }
 
+  column "owner_email" {
+    type = text
+    null = true
+  }
+
   primary_key {
     columns = [column.id]
   }
