@@ -96,6 +96,10 @@ for path in "${pr_migrations[@]}"; do
   rebase_names+=("${path##*/}")
 done
 
+# The merge resolution intentionally takes main's atlas.sum. Re-hash the
+# combined directory once so Atlas can inspect the PR-owned files, then rebase
+# those files to the end of the linear history.
+atlas migrate hash --dir "${migration_url}"
 atlas migrate rebase --dir "${migration_url}" "${rebase_names[@]}"
 git add -- "${migration_dir}"
 git commit -m 'chore: finalize Atlas migrations against main'
