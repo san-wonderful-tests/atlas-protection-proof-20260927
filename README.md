@@ -42,6 +42,18 @@ the `atlas-migration-coordinator` concurrency group:
 The `Actions` tab shows the lease and every safety check. The pull request's
 commit list shows the bot-generated merge/rebase commit.
 
+## GitHub plan limitation
+
+GitHub does not allow rulesets on private repositories in this organization's
+current plan. The workflows still publish and consume `Atlas Finalized`, but
+GitHub cannot yet require that status before every merge. The intended ruleset
+is committed at `.github/main-ruleset.json` and can be enabled after making the
+repository public or upgrading the organization plan.
+
+Do not treat the lab's currently unprotected `main` as the production security
+model. The coordinator protocol is live; enforcement of the exclusive merge
+path is the one unavailable piece.
+
 ## Local commands
 
 Atlas is pinned to `v1.2.0` in GitHub Actions.
