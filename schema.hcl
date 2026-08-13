@@ -62,6 +62,11 @@ table "tasks" {
     null = true
   }
 
+  column "due_at" {
+    type = bigint
+    null = true
+  }
+
   primary_key {
     columns = [column.id]
   }
