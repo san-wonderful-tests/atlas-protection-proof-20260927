@@ -57,6 +57,11 @@ table "tasks" {
     null = false
   }
 
+  column "priority" {
+    type = integer
+    null = true
+  }
+
   primary_key {
     columns = [column.id]
   }
