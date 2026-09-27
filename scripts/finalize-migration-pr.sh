@@ -11,6 +11,7 @@ head_ref=${2:?"usage: finalize-migration-pr.sh <pr-number> <head-ref>"}
 migration_dirs=(migrations migrations_aux)
 schema_files=(schema.hcl schema_aux.hcl)
 base_ref=origin/main
+atlas_config=file:///dev/null
 finalized=false
 
 # shellcheck source=scripts/github-pr-merge.sh
@@ -32,6 +33,9 @@ current_pr_sha() {
 
 on_exit() {
   local exit_code=$?
+  if [[ -n ${archive_root:-} ]]; then
+    rm -rf -- "${archive_root}"
+  fi
   if [[ ${exit_code} -ne 0 && ${finalized} != true ]]; then
     local sha
     sha=$(current_pr_sha 2>/dev/null || true)
@@ -112,23 +116,37 @@ if ! git merge --no-edit "${base_ref}"; then
   git commit --no-edit
 fi
 
-# The merge resolution intentionally takes main's atlas.sum. Re-hash the
-# combined directory once so Atlas can inspect the PR-owned files, then rebase
-# those files to the end of the linear history.
+# Atlas refuses to hash a directory containing two files with the same version.
+# Move PR-owned files aside, hash main's files, then let Atlas allocate a fresh
+# version for each PR file. Copy the original SQL bytes into the new files.
+archive_root=$(mktemp -d)
 for index in "${!migration_dirs[@]}"; do
   migration_dir=${migration_dirs[index]}
   migration_url="file://${PWD}/${migration_dir}"
-  schema_url="file://${PWD}/${schema_files[index]}"
-  rebase_names=()
+  mkdir -p "${archive_root}/${migration_dir}"
+  directory_migrations=()
   for path in "${pr_migrations[@]}"; do
-    [[ ${path} == "${migration_dir}/"* ]] && rebase_names+=("${path##*/}")
+    if [[ ${path} == "${migration_dir}/"* ]]; then
+      directory_migrations+=("${path}")
+      mv -- "${path}" "${archive_root}/${path}"
+    fi
   done
-  atlas migrate hash --dir "${migration_url}"
-  if ((${#rebase_names[@]} > 0)); then
-    atlas migrate rebase --dir "${migration_url}" "${rebase_names[@]}"
-    python3 "$(dirname "${BASH_SOURCE[0]}")/ensure-migration-order.py" "${migration_dir}" "${base_ref}"
-    atlas migrate hash --dir "${migration_url}"
-  fi
+  atlas migrate hash --config "${atlas_config}" --dir "${migration_url}"
+  for path in "${directory_migrations[@]}"; do
+    original_name=${path##*/}
+    if [[ ! ${original_name} =~ ^[0-9]{14}_(.+)\.sql$ ]]; then
+      reject "Invalid Atlas migration filename: ${path}"
+    fi
+    migration_name=${BASH_REMATCH[1]}
+    atlas migrate new --config "${atlas_config}" --dir "${migration_url}" "${migration_name}"
+    allocated_name=$(tail -n 1 "${migration_dir}/atlas.sum" | cut -d ' ' -f 1)
+    if [[ ! ${allocated_name} =~ ^[0-9]{14}_${migration_name}\.sql$ || ! -f ${migration_dir}/${allocated_name} ]]; then
+      reject "Atlas did not allocate an expected filename for ${path}: ${allocated_name}"
+    fi
+    cp -- "${archive_root}/${path}" "${migration_dir}/${allocated_name}"
+    atlas migrate hash --config "${atlas_config}" --dir "${migration_url}"
+    echo "Atlas allocated ${migration_dir}/${allocated_name} for ${path}."
+  done
   git add -- "${migration_dir}"
 done
 if ! git diff --cached --quiet; then
@@ -142,15 +160,17 @@ for index in "${!migration_dirs[@]}"; do
   if [[ -n $(git diff --name-only --diff-filter=A "${base_ref}"...HEAD -- "${migration_dir}/*.sql") ]]; then
     "$(dirname "${BASH_SOURCE[0]}")/check-migration-history.sh" "${base_ref}" "${migration_dir}" || exit 2
   fi
-  atlas migrate validate --dir "${migration_url}" --dev-url "${ATLAS_DEV_URL}" || exit 2
+  atlas migrate validate --config "${atlas_config}" --dir "${migration_url}" --dev-url "${ATLAS_DEV_URL}" || exit 2
   if [[ -n "${ATLAS_TOKEN:-}" ]]; then
     atlas migrate lint \
+      --config "${atlas_config}" \
       --dir "${migration_url}" \
       --dev-url "${ATLAS_DEV_URL}" \
       --git-base "${base_ref}" \
       --git-dir . || exit 2
   fi
   atlas migrate diff coordinator_verify_no_drift \
+    --config "${atlas_config}" \
     --dir "${migration_url}" \
     --to "${schema_url}" \
     --dev-url "${ATLAS_DEV_URL}" || exit 2
