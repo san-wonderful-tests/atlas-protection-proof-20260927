@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - migrations/**
+      - migrations_aux/**
       - schema.hcl
+      - schema_aux.hcl
       - atlas.hcl
       - scripts/**
 
@@ -47,14 +49,17 @@ jobs:
       - name: Validate branch migration history
         run: |
           set -euo pipefail
-          atlas migrate validate --dir "file://${PWD}/migrations" --dev-url "${ATLAS_DEV_URL}"
-          atlas migrate diff pr_verify_no_drift \
-            --dir "file://${PWD}/migrations" \
-            --to "file://${PWD}/schema.hcl" \
-            --dev-url "${ATLAS_DEV_URL}"
-          if [[ -n $(git status --porcelain -- migrations) ]]; then
+          for entry in 'migrations schema.hcl' 'migrations_aux schema_aux.hcl'; do
+            read -r migration_dir schema_file <<<"${entry}"
+            atlas migrate validate --dir "file://${PWD}/${migration_dir}" --dev-url "${ATLAS_DEV_URL}"
+            atlas migrate diff pr_verify_no_drift \
+              --dir "file://${PWD}/${migration_dir}" \
+              --to "file://${PWD}/${schema_file}" \
+              --dev-url "${ATLAS_DEV_URL}"
+          done
+          if [[ -n $(git status --porcelain -- migrations migrations_aux) ]]; then
             echo "Schema changes require a committed Atlas migration." >&2
-            git status --short -- migrations
+            git status --short -- migrations migrations_aux
             exit 1
           fi
 

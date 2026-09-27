@@ -1,0 +1,100 @@
+name: Finalized Commit CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact coordinator commit to validate
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: atlas
+          POSTGRES_DB: atlas_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U atlas -d atlas_dev"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      ATLAS_VERSION: v1.2.0
+      ATLAS_DEV_URL: postgres://atlas:atlas@127.0.0.1:5432/atlas_dev?sslmode=disable&search_path=public
+    steps:
+      - name: Checkout the exact finalized commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.expected_sha }}
+          persist-credentials: false
+
+      - name: Assert the checked-out SHA
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+
+      - name: Install pinned Atlas CLI
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl -sSf https://atlasgo.sh | ATLAS_VERSION="${ATLAS_VERSION}" CI=true sh -s -- --no-install -o "${RUNNER_TEMP}/bin/atlas"
+          chmod +x "${RUNNER_TEMP}/bin/atlas"
+          echo "${RUNNER_TEMP}/bin" >>"${GITHUB_PATH}"
+
+      - name: Validate all migration histories at the finalized SHA
+        run: |
+          set -euo pipefail
+          for entry in 'migrations schema.hcl' 'migrations_aux schema_aux.hcl'; do
+            read -r migration_dir schema_file <<<"${entry}"
+            atlas migrate validate --dir "file://${PWD}/${migration_dir}" --dev-url "${ATLAS_DEV_URL}"
+            atlas migrate diff ci_verify_no_drift \
+              --dir "file://${PWD}/${migration_dir}" \
+              --to "file://${PWD}/${schema_file}" \
+              --dev-url "${ATLAS_DEV_URL}"
+            if [[ -n $(git status --porcelain -- "${migration_dir}") ]]; then
+              echo "Desired schema and ${migration_dir} history differ." >&2
+              exit 1
+            fi
+          done
+
+      - name: Test coordinator logic at the finalized SHA
+        run: make test
+
+  report:
+    if: always()
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Report the exact SHA and validation result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ${VALIDATE_RESULT} == success ]]; then
+            state=success
+          else
+            state=failure
+          fi
+          gh api --method POST "repos/${REPOSITORY}/statuses/${EXPECTED_SHA}" \
+            -f state="${state}" \
+            -f context='Atlas CI' \
+            -f description="Finalized SHA validation: ${VALIDATE_RESULT}" \
+            -f target_url="${RUN_URL}" >/dev/null

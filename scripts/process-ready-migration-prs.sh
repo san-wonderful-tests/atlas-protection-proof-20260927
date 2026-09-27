@@ -17,6 +17,7 @@ echo "Found ${#ready_prs[@]} ready migration PR(s)."
 started_at=$(date +%s)
 processed=0
 failed=0
+retryable=0
 
 for pr_number in "${ready_prs[@]}"; do
   metadata=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}")
@@ -46,14 +47,20 @@ for pr_number in "${ready_prs[@]}"; do
   if ../trusted/scripts/finalize-migration-pr.sh "${pr_number}" "${head_ref}"; then
     processed=$((processed + 1))
   else
-    echo "PR #${pr_number} failed finalization; removing db-ready until it is fixed." >&2
-    gh api --method DELETE "repos/${GITHUB_REPOSITORY}/issues/${pr_number}/labels/db-ready" >/dev/null || true
+    exit_code=$?
+    if [[ ${exit_code} -eq 2 ]]; then
+      echo "PR #${pr_number} has a deterministic migration or CI failure; removing db-ready until it is fixed." >&2
+      gh api --method DELETE "repos/${GITHUB_REPOSITORY}/issues/${pr_number}/labels/db-ready" >/dev/null || true
+    else
+      echo "PR #${pr_number} hit a retryable coordinator failure; keeping db-ready for the next scan." >&2
+      retryable=$((retryable + 1))
+    fi
     failed=$((failed + 1))
   fi
 done
 
 elapsed=$(( $(date +%s) - started_at ))
-echo "Processed ${processed} PR(s), failed ${failed}, elapsed ${elapsed}s."
+echo "Processed ${processed} PR(s), failed ${failed} (${retryable} retryable), elapsed ${elapsed}s."
 if ((failed > 0)); then
   exit 1
 fi

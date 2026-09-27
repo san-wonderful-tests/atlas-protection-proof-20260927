@@ -7,11 +7,17 @@ on:
     branches: [main]
     paths:
       - migrations/**
+      - migrations_aux/**
       - schema.hcl
+      - schema_aux.hcl
       - atlas.hcl
       - .github/workflows/migration-coordinator.yml
+      - .github/workflows/finalized-ci.yml
       - scripts/process-ready-migration-prs.sh
       - scripts/finalize-migration-pr.sh
+      - scripts/wait-finalized-ci.sh
+  schedule:
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 # GitHub retains only one pending run in a concurrency group. Each surviving

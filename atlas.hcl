@@ -12,3 +12,12 @@ env "local" {
     }
   }
 }
+
+env "auxiliary" {
+  src = "file://schema_aux.hcl"
+  dev = "docker://postgres/17/dev?search_path=public"
+
+  migration {
+    dir = "file://migrations_aux"
+  }
+}

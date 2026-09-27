@@ -8,10 +8,9 @@ head_ref=${2:?"usage: finalize-migration-pr.sh <pr-number> <head-ref>"}
 : "${GH_TOKEN:?GH_TOKEN is required}"
 : "${ATLAS_DEV_URL:?ATLAS_DEV_URL is required}"
 
-migration_dir=migrations
+migration_dirs=(migrations migrations_aux)
+schema_files=(schema.hcl schema_aux.hcl)
 base_ref=origin/main
-migration_url="file://${PWD}/${migration_dir}"
-schema_url="file://${PWD}/schema.hcl"
 finalized=false
 
 # shellcheck source=scripts/github-pr-merge.sh
@@ -37,18 +36,29 @@ on_exit() {
     local sha
     sha=$(current_pr_sha 2>/dev/null || true)
     if [[ -n "${sha}" ]]; then
-      post_status "${sha}" failure 'Coordinator failed; inspect the workflow log.' || true
+      if [[ ${exit_code} -eq 2 ]]; then
+        post_status "${sha}" failure 'Migration rejected; inspect the workflow log.' || true
+      else
+        post_status "${sha}" pending 'Coordinator interrupted; queued for retry.' || true
+      fi
     fi
   fi
 }
 trap on_exit EXIT
 
+reject() {
+  echo "$*" >&2
+  exit 2
+}
+
 fingerprint() {
   local ref=$1
-  git rev-parse \
-    "${ref}:migrations/atlas.sum" \
-    "${ref}:schema.hcl" \
-    "${ref}:atlas.hcl" |
+  local paths=("${ref}:atlas.hcl")
+  local index
+  for index in "${!migration_dirs[@]}"; do
+    paths+=("${ref}:${migration_dirs[index]}/atlas.sum" "${ref}:${schema_files[index]}")
+  done
+  git rev-parse "${paths[@]}" |
     shasum -a 256 |
     awk '{print $1}'
 }
@@ -58,22 +68,22 @@ original_head_sha=$(git rev-parse HEAD)
 post_status "$(git rev-parse HEAD)" pending 'Waiting for the migration coordinator.'
 
 pr_migrations=()
-while IFS= read -r path; do
-  [[ -n "${path}" ]] && pr_migrations+=("${path}")
-done < <(git diff --name-only --diff-filter=A "${base_ref}"...HEAD -- "${migration_dir}/*.sql")
-if ((${#pr_migrations[@]} == 0)); then
-  echo "The PR changes Atlas inputs but does not add a SQL migration." >&2
-  exit 1
-fi
-
 changed_existing=()
-while IFS= read -r path; do
-  [[ -n "${path}" ]] && changed_existing+=("${path}")
-done < <(git diff --name-only --diff-filter=MDR "${base_ref}"...HEAD -- "${migration_dir}/*.sql")
+for migration_dir in "${migration_dirs[@]}"; do
+  while IFS= read -r path; do
+    [[ -n "${path}" ]] && pr_migrations+=("${path}")
+  done < <(git diff --name-only --diff-filter=A "${base_ref}"...HEAD -- "${migration_dir}/*.sql")
+  while IFS= read -r path; do
+    [[ -n "${path}" ]] && changed_existing+=("${path}")
+  done < <(git diff --name-only --diff-filter=MDR "${base_ref}"...HEAD -- "${migration_dir}/*.sql")
+done
+if ((${#pr_migrations[@]} == 0)); then
+  reject 'The PR changes Atlas inputs but does not add a SQL migration.'
+fi
 if ((${#changed_existing[@]} > 0)); then
   printf 'The PR modifies existing migrations:\n' >&2
   printf '  %s\n' "${changed_existing[@]}" >&2
-  exit 1
+  exit 2
 fi
 
 base_fingerprint=$(fingerprint "${base_ref}")
@@ -83,54 +93,70 @@ if ! git merge --no-edit "${base_ref}"; then
   while IFS= read -r path; do
     [[ -n "${path}" ]] && conflicts+=("${path}")
   done < <(git diff --name-only --diff-filter=U)
-  if ((${#conflicts[@]} != 1)) || [[ ${conflicts[0]} != "${migration_dir}/atlas.sum" ]]; then
-    printf 'Coordinator only resolves atlas.sum; unresolved conflicts:\n' >&2
-    printf '  %s\n' "${conflicts[@]}" >&2
-    git merge --abort
-    exit 1
-  fi
-
-  git checkout --theirs -- "${migration_dir}/atlas.sum"
-  git add -- "${migration_dir}/atlas.sum"
+  for conflict in "${conflicts[@]}"; do
+    allowed=false
+    for migration_dir in "${migration_dirs[@]}"; do
+      [[ ${conflict} == "${migration_dir}/atlas.sum" ]] && allowed=true
+    done
+    if [[ ${allowed} != true ]]; then
+      printf 'Coordinator only resolves atlas.sum; unresolved conflicts:\n' >&2
+      printf '  %s\n' "${conflicts[@]}" >&2
+      git merge --abort
+      exit 2
+    fi
+  done
+  for conflict in "${conflicts[@]}"; do
+    git checkout --theirs -- "${conflict}"
+    git add -- "${conflict}"
+  done
   git commit --no-edit
 fi
-
-rebase_names=()
-for path in "${pr_migrations[@]}"; do
-  rebase_names+=("${path##*/}")
-done
 
 # The merge resolution intentionally takes main's atlas.sum. Re-hash the
 # combined directory once so Atlas can inspect the PR-owned files, then rebase
 # those files to the end of the linear history.
-atlas migrate hash --dir "${migration_url}"
-atlas migrate rebase --dir "${migration_url}" "${rebase_names[@]}"
-git add -- "${migration_dir}"
-git commit -m 'chore: finalize Atlas migrations against main'
+for index in "${!migration_dirs[@]}"; do
+  migration_dir=${migration_dirs[index]}
+  migration_url="file://${PWD}/${migration_dir}"
+  schema_url="file://${PWD}/${schema_files[index]}"
+  rebase_names=()
+  for path in "${pr_migrations[@]}"; do
+    [[ ${path} == "${migration_dir}/"* ]] && rebase_names+=("${path##*/}")
+  done
+  atlas migrate hash --dir "${migration_url}"
+  if ((${#rebase_names[@]} > 0)); then
+    atlas migrate rebase --dir "${migration_url}" "${rebase_names[@]}"
+  fi
+  git add -- "${migration_dir}"
+done
+if ! git diff --cached --quiet; then
+  git commit -m 'chore: finalize Atlas migrations against main'
+fi
 
-"$(dirname "${BASH_SOURCE[0]}")/check-migration-history.sh" "${base_ref}" "${migration_dir}"
-atlas migrate validate --dir "${migration_url}" --dev-url "${ATLAS_DEV_URL}"
-if [[ -n "${ATLAS_TOKEN:-}" ]]; then
-  atlas migrate lint \
+for index in "${!migration_dirs[@]}"; do
+  migration_dir=${migration_dirs[index]}
+  migration_url="file://${PWD}/${migration_dir}"
+  schema_url="file://${PWD}/${schema_files[index]}"
+  if [[ -n $(git diff --name-only --diff-filter=A "${base_ref}"...HEAD -- "${migration_dir}/*.sql") ]]; then
+    "$(dirname "${BASH_SOURCE[0]}")/check-migration-history.sh" "${base_ref}" "${migration_dir}" || exit 2
+  fi
+  atlas migrate validate --dir "${migration_url}" --dev-url "${ATLAS_DEV_URL}" || exit 2
+  if [[ -n "${ATLAS_TOKEN:-}" ]]; then
+    atlas migrate lint \
+      --dir "${migration_url}" \
+      --dev-url "${ATLAS_DEV_URL}" \
+      --git-base "${base_ref}" \
+      --git-dir . || exit 2
+  fi
+  atlas migrate diff coordinator_verify_no_drift \
     --dir "${migration_url}" \
-    --dev-url "${ATLAS_DEV_URL}" \
-    --git-base "${base_ref}" \
-    --git-dir .
-else
-  echo "ATLAS_TOKEN is not configured; skipping optional Atlas Pro migration lint."
-fi
-
-atlas migrate diff coordinator_verify_no_drift \
-  --dir "${migration_url}" \
-  --to "${schema_url}" \
-  --dev-url "${ATLAS_DEV_URL}"
-
-drift=$(git status --porcelain -- "${migration_dir}")
-if [[ -n "${drift}" ]]; then
-  echo "Desired schema and migration history are not synchronized:" >&2
-  echo "${drift}" >&2
-  exit 1
-fi
+    --to "${schema_url}" \
+    --dev-url "${ATLAS_DEV_URL}" || exit 2
+  drift=$(git status --porcelain -- "${migration_dir}")
+  if [[ -n "${drift}" ]]; then
+    reject "Desired schema and migration history are not synchronized in ${migration_dir}: ${drift}"
+  fi
+done
 
 git push origin "HEAD:refs/heads/${head_ref}"
 head_sha=$(git rev-parse HEAD)
@@ -142,7 +168,9 @@ if [[ $(fingerprint origin/main) != "${base_fingerprint}" ]]; then
   exit 1
 fi
 
-post_status "${head_sha}" success 'Rebased and validated against the current migration tip.'
+post_status "${head_sha}" pending 'Waiting for CI on the finalized commit.'
+"$(dirname "${BASH_SOURCE[0]}")/wait-finalized-ci.sh" "${head_sha}" || exit $?
+post_status "${head_sha}" success 'Rebased and validated; finalized commit passed CI.'
 
 if ! merge_finalized_pr "${pr_number}" "${head_sha}" "${base_fingerprint}" "${original_head_sha}"; then
   post_status "${head_sha}" failure 'GitHub rejected the finalized merge.'
