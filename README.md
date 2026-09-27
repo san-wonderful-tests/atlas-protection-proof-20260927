@@ -1,107 +1,31 @@
-# Atlas migration coordinator lab
+# Atlas branch protection proof
 
-> This repository is an isolated copy used for the 2026-09-27 concurrency experiment. See [SCALE_PLAN.md](SCALE_PLAN.md) for the current live results and deployment gaps. The historical PR links below refer to the original coordinator lab.
+This public synthetic repository tests GitHub's required-status enforcement for
+the Atlas migration coordinator. It is separate from the private
+[scale experiment](https://github.com/san-wonderful-tests/atlas-migration-scale-proof-20260927)
+because this organization's plan does not enforce rulesets on private repos.
 
-This private repository demonstrates how to serialize Atlas migration pull
-requests without enabling GitHub Merge Queue.
+The active `main` ruleset is `24073500`. It requires pull requests, squash
+merges, and two status contexts: `Atlas Finalized` and `Atlas CI`. Required
+checks are **strict**, so a PR behind `main` must be updated and tested again.
+The committed [ruleset definition](.github/main-ruleset.json) records that
+configuration.
 
-The repository deliberately keeps Atlas's committed `atlas.sum` integrity file.
-Migration pull requests cannot merge until a trusted workflow has rebased their
-new migration files onto the current migration tip, validated the resulting
-history, and published the `Atlas Finalized` commit status.
+The coordinator uses a trusted workflow from `main` to resolve permitted
+`atlas.sum` conflicts and validate migration history. It pushes a finalized
+head, dispatches read-only CI on that exact SHA, and merges only after both
+required statuses succeed. The [scale report](https://github.com/san-wonderful-tests/atlas-migration-scale-proof-20260927/blob/main/SCALE_PLAN.md)
+describes the implementation, test matrix, and remaining production gaps.
 
-## The flow
+## Enforcement evidence
 
-1. A developer changes `schema.hcl` and runs `make atlas-diff NAME=...`.
-2. The pull request receives a pending `Atlas Finalized` status.
-3. A maintainer adds the `db-ready` label.
-4. The migration coordinator takes a repository-wide Actions concurrency lease.
-5. It merges the latest `main` into the branch, automatically resolves an
-   `atlas.sum`-only conflict, and runs `atlas migrate rebase` for only the SQL
-   files added by that pull request.
-6. It validates immutable history, ordering, checksums, SQL execution, and
-   desired-schema drift against PostgreSQL 17. Atlas Pro migration lint also
-   runs when an `ATLAS_TOKEN` repository secret is configured.
-7. It pushes the finalized migration commit, verifies that the migration tip on
-   `main` has not changed, publishes `Atlas Finalized`, waits for GitHub to
-   recompute mergeability for the exact pushed SHA, and squash-merges the PR.
+- [PR #1](https://github.com/san-wonderful-tests/atlas-protection-proof-20260927/pull/1): GitHub rejected a merge with failed required checks (HTTP 405).
+- [PR #4](https://github.com/san-wonderful-tests/atlas-protection-proof-20260927/pull/4): a rewritten coordinator head passed both required contexts and merged.
+- [PR #6](https://github.com/san-wonderful-tests/atlas-protection-proof-20260927/pull/6): with strict checks disabled, an unrelated `main` change landed during CI and the old-base head still merged. This exposed a correctness gap.
+- [PR #8](https://github.com/san-wonderful-tests/atlas-protection-proof-20260927/pull/8): with strict checks enabled, GitHub rejected that stale-base state despite green head statuses. [Re-finalization](https://github.com/san-wonderful-tests/atlas-protection-proof-20260927/actions/runs/36320770044) and [CI on the exact new SHA](https://github.com/san-wonderful-tests/atlas-protection-proof-20260927/actions/runs/36320801542) then passed and the PR merged.
 
-Other pull requests are not serialized. A push to `main` that changes the Atlas
-inputs invalidates outstanding migration statuses.
-
-## Live race test
-
-Two draft exercise pull requests are ready from the same `main` revision. Both
-contain a valid but mutually conflicting `atlas.sum`:
-
-- [PR #5: add task due timestamp](https://github.com/san-wonderful-tests/atlas-migration-coordinator-lab/pull/5)
-- [PR #6: add project archive timestamp](https://github.com/san-wonderful-tests/atlas-migration-coordinator-lab/pull/6)
-
-Mark both ready for review, then add `db-ready` to both PRs in quick succession.
-The coordinator workflows share the `atlas-migration-coordinator` concurrency
-group:
-
-- The first PR is finalized and merged.
-- The second workflow then fetches the new migration tip, rebases its migration
-  to sort last, validates the combined history, and merges.
-- No engineer resolves `atlas.sum` manually.
-
-The `Actions` tab shows the lease and every safety check. The pull request's
-commit list shows the bot-generated merge/rebase commit.
-
-The setup has already completed one clean race: [PR #3](https://github.com/san-wonderful-tests/atlas-migration-coordinator-lab/pull/3)
-merged first, then [PR #4](https://github.com/san-wonderful-tests/atlas-migration-coordinator-lab/pull/4)
-rebased its migration onto the new tip, replayed the combined history, and
-merged. [PR #1](https://github.com/san-wonderful-tests/atlas-migration-coordinator-lab/pull/1)
-also demonstrates the negative path: the coordinator rejected a real
-`schema.hcl` conflict instead of silently resolving anything beyond
-`atlas.sum`.
-
-## GitHub plan limitation
-
-GitHub does not allow rulesets on private repositories in this organization's
-current plan. The workflows still publish and consume `Atlas Finalized`, but
-GitHub cannot yet require that status before every merge. The intended ruleset
-is committed at `.github/main-ruleset.json` and can be enabled after making the
-repository public or upgrading the organization plan.
-
-Do not treat the lab's currently unprotected `main` as the production security
-model. The coordinator protocol is live; enforcement of the exclusive merge
-path is the one unavailable piece.
-
-## Local commands
-
-Atlas is pinned to `v1.2.0` in GitHub Actions.
-
-```bash
-make atlas-diff NAME=add_example_column
-make atlas-hash
-make atlas-validate
-make test
-```
-
-`make atlas-diff` uses a disposable PostgreSQL 17 dev database through Docker.
-`atlas migrate lint` became an Atlas Pro feature in current CLI releases, so it
-is deliberately optional rather than making the lab depend on an Atlas Cloud
-account.
-
-## Safety boundary
-
-This is a lab implementation, not a production credential model. It uses the
-repository `GITHUB_TOKEN` and executes only the finalizer script from protected
-`main`; it never executes shell code from the pull request. Candidate SQL is
-applied only to an isolated PostgreSQL service container.
-
-A branch update made by the repository `GITHUB_TOKEN` produces an
-approval-required `pull_request` CI run by GitHub design. The lab coordinator
-therefore performs the same migration validation in its trusted job before
-publishing `Atlas Finalized`. A production GitHub App token should trigger the
-ordinary post-update CI run instead.
-
-For Wonderful, the same protocol should be owned by a narrowly scoped GitHub
-App. The App should be the only integration allowed to publish
-`Atlas Finalized` and merge migration PRs.
-
-Synthetic code-only main advance for A17.
-
-Second synthetic code-only advance with strict checks enabled.
+This proves enforcement on small synthetic PRs. Wonderful's five Atlas
+directories, full monorepo CI, and 300-PR/day scale have not been proven. The
+[test plan](https://github.com/san-wonderful-tests/atlas-autorebase-proof-20260927/blob/main/TEST_PLAN.md)
+records the remaining acceptance cases. The current release decision is
+**no-go for Wonderful deployment**.
