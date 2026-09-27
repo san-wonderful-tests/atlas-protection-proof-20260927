@@ -15,6 +15,7 @@ on:
       - .github/workflows/finalized-ci.yml
       - scripts/process-ready-migration-prs.sh
       - scripts/finalize-migration-pr.sh
+      - scripts/ensure-migration-order.py
       - scripts/wait-finalized-ci.sh
   schedule:
     - cron: '*/5 * * * *'

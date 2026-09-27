@@ -126,6 +126,8 @@ for index in "${!migration_dirs[@]}"; do
   atlas migrate hash --dir "${migration_url}"
   if ((${#rebase_names[@]} > 0)); then
     atlas migrate rebase --dir "${migration_url}" "${rebase_names[@]}"
+    python3 "$(dirname "${BASH_SOURCE[0]}")/ensure-migration-order.py" "${migration_dir}" "${base_ref}"
+    atlas migrate hash --dir "${migration_url}"
   fi
   git add -- "${migration_dir}"
 done
