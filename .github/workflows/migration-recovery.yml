@@ -1,0 +1,46 @@
+name: Migration Coordinator Recovery
+
+on:
+  workflow_run:
+    workflows: [Migration Coordinator]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  pull-requests: read
+
+jobs:
+  retry-interrupted-worker:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'cancelled' ||
+      github.event.workflow_run.conclusion == 'timed_out'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      INTERRUPTED_RUN: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Rescan only after a worker actually started
+        run: |
+          set -euo pipefail
+          if [[ -n ${INTERRUPTED_RUN} ]]; then
+            jobs=$(gh api "repos/${REPOSITORY}/actions/runs/${INTERRUPTED_RUN}/jobs" --jq '.total_count')
+            if ((jobs == 0)); then
+              echo "Coalesced pending run ${INTERRUPTED_RUN} had no worker job."
+              exit 0
+            fi
+          fi
+
+          ready=$(gh api --paginate "repos/${REPOSITORY}/pulls?state=open&per_page=100" \
+            --jq '.[] | select([.labels[].name] | index("db-ready")) | .number')
+          if [[ -z ${ready} ]]; then
+            echo 'No ready migration PRs remain.'
+            exit 0
+          fi
+
+          echo "Rescanning ready migration PRs: ${ready//$'\n'/, }."
+          gh api --method POST "repos/${REPOSITORY}/actions/workflows/migration-coordinator.yml/dispatches" \
+            -f ref=main >/dev/null
