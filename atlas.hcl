@@ -1,5 +1,5 @@
 env "local" {
-  src = "file://schema.hcl"
+  src = "file://schema.hcl" # main branch
   dev = "docker://postgres/17/dev?search_path=public"
 
   migration {
