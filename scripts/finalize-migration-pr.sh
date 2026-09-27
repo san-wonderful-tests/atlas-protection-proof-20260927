@@ -54,6 +54,7 @@ fingerprint() {
 }
 
 git fetch origin main --prune
+original_head_sha=$(git rev-parse HEAD)
 post_status "$(git rev-parse HEAD)" pending 'Waiting for the migration coordinator.'
 
 pr_migrations=()
@@ -107,7 +108,7 @@ atlas migrate rebase --dir "${migration_url}" "${rebase_names[@]}"
 git add -- "${migration_dir}"
 git commit -m 'chore: finalize Atlas migrations against main'
 
-scripts/check-migration-history.sh "${base_ref}" "${migration_dir}"
+"$(dirname "${BASH_SOURCE[0]}")/check-migration-history.sh" "${base_ref}" "${migration_dir}"
 atlas migrate validate --dir "${migration_url}" --dev-url "${ATLAS_DEV_URL}"
 if [[ -n "${ATLAS_TOKEN:-}" ]]; then
   atlas migrate lint \
@@ -143,7 +144,7 @@ fi
 
 post_status "${head_sha}" success 'Rebased and validated against the current migration tip.'
 
-if ! merge_finalized_pr "${pr_number}" "${head_sha}" "${base_fingerprint}"; then
+if ! merge_finalized_pr "${pr_number}" "${head_sha}" "${base_fingerprint}" "${original_head_sha}"; then
   post_status "${head_sha}" failure 'GitHub rejected the finalized merge.'
   exit 1
 fi

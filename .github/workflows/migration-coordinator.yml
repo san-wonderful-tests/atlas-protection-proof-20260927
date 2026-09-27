@@ -2,14 +2,20 @@ name: Migration Coordinator
 
 on:
   pull_request_target:
-    types: [labeled]
+    types: [labeled, ready_for_review, reopened]
+  push:
+    branches: [main]
+    paths:
+      - migrations/**
+      - schema.hcl
+      - atlas.hcl
+      - .github/workflows/migration-coordinator.yml
+      - scripts/process-ready-migration-prs.sh
+      - scripts/finalize-migration-pr.sh
   workflow_dispatch:
-    inputs:
-      pr_number:
-        description: Pull request number to finalize
-        required: true
-        type: number
 
+# GitHub retains only one pending run in a concurrency group. Each surviving
+# worker scans all ready PRs, so cancelled label events cannot drop work.
 concurrency:
   group: atlas-migration-coordinator
   cancel-in-progress: false
@@ -22,9 +28,11 @@ permissions:
 jobs:
   finalize:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      github.event_name != 'pull_request_target' ||
+      github.event.action != 'labeled' ||
       github.event.label.name == 'db-ready'
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     services:
       postgres:
         image: postgres:17
@@ -45,24 +53,6 @@ jobs:
       ATLAS_TOKEN: ${{ secrets.ATLAS_TOKEN }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Resolve pull request metadata
-        id: pr
-        env:
-          REPOSITORY: ${{ github.repository }}
-          EVENT_PR: ${{ github.event.pull_request.number }}
-          INPUT_PR: ${{ inputs.pr_number }}
-        run: |
-          set -euo pipefail
-          pr_number=${INPUT_PR:-${EVENT_PR}}
-          metadata=$(gh api "repos/${REPOSITORY}/pulls/${pr_number}")
-          head_repo=$(jq -r '.head.repo.full_name' <<<"${metadata}")
-          if [[ "${head_repo}" != "${REPOSITORY}" ]]; then
-            echo "Fork pull requests are intentionally unsupported by this privileged lab workflow." >&2
-            exit 1
-          fi
-          echo "number=${pr_number}" >>"${GITHUB_OUTPUT}"
-          echo "head_ref=$(jq -r '.head.ref' <<<"${metadata}")" >>"${GITHUB_OUTPUT}"
-
       - name: Checkout trusted coordinator from main
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -70,10 +60,10 @@ jobs:
           path: trusted
           persist-credentials: false
 
-      - name: Checkout candidate branch
+      - name: Checkout candidate workspace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ steps.pr.outputs.head_ref }}
+          ref: main
           path: candidate
           fetch-depth: 0
           token: ${{ github.token }}
@@ -92,8 +82,8 @@ jobs:
           git config user.name 'atlas-coordinator[bot]'
           git config user.email 'atlas-coordinator[bot]@users.noreply.github.com'
 
-      - name: Finalize and merge
+      - name: Process every ready migration PR
         working-directory: candidate
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: ../trusted/scripts/finalize-migration-pr.sh '${{ steps.pr.outputs.number }}' '${{ steps.pr.outputs.head_ref }}'
+        run: ../trusted/scripts/process-ready-migration-prs.sh

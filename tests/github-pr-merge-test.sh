@@ -80,6 +80,8 @@ gh() {
   poll=$(increment poll)
   if [[ ${mode} == head_changed ]]; then
     printf '%s\n' '{"head":{"sha":"different-head"},"mergeable":true,"mergeable_state":"clean"}'
+  elif [[ ${mode} == stale_previous && ${poll} -lt 3 ]]; then
+    printf '%s\n' '{"head":{"sha":"previous-head"},"mergeable":true,"mergeable_state":"clean"}'
   elif [[ ${poll} -eq 1 ]]; then
     printf '%s\n' '{"head":{"sha":"expected-head"},"mergeable":null,"mergeable_state":"unknown"}'
   else
@@ -100,6 +102,13 @@ if merge_finalized_pr 6 expected-head expected-tip; then
   exit 1
 fi
 [[ $(count merge) == 0 ]]
+
+rm -f "${test_root}"/{poll,merge,fetch,sleep,statuses}
+mode=stale_previous
+merge_finalized_pr 6 expected-head expected-tip previous-head
+[[ $(count poll) == 3 ]]
+[[ $(count merge) == 1 ]]
+[[ $(count sleep) == 2 ]]
 
 rm -f "${test_root}"/{poll,merge,fetch,sleep,statuses}
 mode=retry_405

@@ -7,6 +7,7 @@ merge_finalized_pr() {
   local pr_number=$1
   local expected_head_sha=$2
   local expected_base_fingerprint=$3
+  local previous_head_sha=${4:-}
   local max_attempts=${MERGEABILITY_MAX_ATTEMPTS:-30}
   local poll_seconds=${MERGEABILITY_POLL_SECONDS:-2}
   local attempt metadata current_head mergeable mergeable_state
@@ -42,6 +43,11 @@ merge_finalized_pr() {
     if ! current_head=$(jq -er '.head.sha' <<<"${metadata}"); then
       echo "GitHub returned PR metadata without a head SHA." >&2
       return 1
+    fi
+    if [[ ${current_head} != "${expected_head_sha}" && -n ${previous_head_sha} && ${current_head} == "${previous_head_sha}" && ${attempt} -lt ${max_attempts} ]]; then
+      echo "Waiting for GitHub to observe finalized head ${expected_head_sha}; it still reports the previous head (${attempt}/${max_attempts})."
+      sleep "${poll_seconds}"
+      continue
     fi
     if [[ ${current_head} != "${expected_head_sha}" ]]; then
       echo "PR head changed from ${expected_head_sha} to ${current_head}; refusing to merge." >&2
