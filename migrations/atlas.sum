@@ -1,4 +1,4 @@
-h1:zCPHB4dZxKuLwTt5Apl+tnYt0cPXRObuP2kkwX6rFbA=
+h1:9SeEi2mbc7f+SvI6VDJLle0wxMIPf+aYUwakXOMkTQw=
 20260813080547_baseline.sql h1:P1eW0nxndAp4xwu22ztXWvIbTsHbUnbPWGd5wspaHLE=
 20260813081330_add_project_owner_email.sql h1:8xqPJ0RnhhHapHoRLZhmEvppSWoFwijDIEYC/NiZRus=
 20260813081614_add_tasks_fixture.sql h1:+0OoCR/wmm/LGw4qDfFMiUSt2VAVAT9s/Eq1VjsZ1Fk=
@@ -32,3 +32,4 @@ h1:zCPHB4dZxKuLwTt5Apl+tnYt0cPXRObuP2kkwX6rFbA=
 20260927140001_gated_10.sql h1:GqHCrbN7HyTyNxlcIhCOCPKv+8qXGbrFMtakUKVZWZA=
 20260927140002_main_advance_interference.sql h1:H8I2NKLRiZLRe5gmrxorMkQd6Qj30F+m2Z/aBS7iK6A=
 20260927140003_main_advance_candidate.sql h1:i8YVmNnHIvr9VrSEs1oWoWw6TKQxyxWYGxGPbhSDtNU=
+20260927140004_recovery_b.sql h1:o6u005D9HmzVfIddNT1pVoss0BzsmDMN2gWX/nUO9go=
