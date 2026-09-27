@@ -103,3 +103,5 @@ App. The App should be the only integration allowed to publish
 `Atlas Finalized` and merge migration PRs.
 
 Synthetic code-only main advance for A17.
+
+Second synthetic code-only advance with strict checks enabled.
