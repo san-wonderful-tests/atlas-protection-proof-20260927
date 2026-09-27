@@ -121,3 +121,5 @@ fi
 [[ $(count merge) == 0 ]]
 
 echo "GitHub mergeability retry tests passed."
+
+exit 1 # deliberate required-check failure
