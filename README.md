@@ -101,3 +101,5 @@ ordinary post-update CI run instead.
 For Wonderful, the same protocol should be owned by a narrowly scoped GitHub
 App. The App should be the only integration allowed to publish
 `Atlas Finalized` and merge migration PRs.
+
+Synthetic code-only main advance for A17.
