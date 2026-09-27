@@ -1,5 +1,7 @@
 # Atlas migration coordinator lab
 
+> This repository is an isolated copy used for the 2026-09-27 concurrency experiment. See [SCALE_PLAN.md](SCALE_PLAN.md) for the current live results and deployment gaps. The historical PR links below refer to the original coordinator lab.
+
 This private repository demonstrates how to serialize Atlas migration pull
 requests without enabling GitHub Merge Queue.
 
